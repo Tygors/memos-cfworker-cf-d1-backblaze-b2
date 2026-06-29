@@ -24,3 +24,11 @@ database_id = "71f6ed36-de26-4517-b7b0-455906b3fe07"
 
 [ai]
 binding = "AI"
+
+[observability]
+enabled = true
+head_sampling_rate = 1
+
+[observability.logs]
+enabled = true
+invocation_logs = true
