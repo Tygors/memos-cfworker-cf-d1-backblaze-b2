@@ -4,6 +4,7 @@ import { authOptional, authRequired } from "../middleware/auth";
 import * as settingDB from "../db/setting";
 import { createErrorBody } from "../error";
 import { deleteCachedKeys } from "../cache";
+import { s3Put, s3Delete } from "../s3";
 
 type AttApp = { Bindings: Env; Variables: { user: UserPayload } };
 
@@ -174,12 +175,10 @@ attachmentRoutes.post("/", authRequired, async (c) => {
   }
 
   const uid = crypto.randomUUID().replace(/-/g, "").slice(0, 22);
-  const r2Key = `attachments/${uid}/${filename}`;
+  const objectKey = `attachments/${uid}/${filename}`;
 
-  // Store in R2
-  await c.env.BUCKET.put(r2Key, fileData, {
-    httpMetadata: { contentType: fileType },
-  });
+  // Store in S3
+  await s3Put(c.env, objectKey, fileData, fileType);
 
   // Store metadata in D1
   const createdTs = nowTs();
@@ -187,7 +186,7 @@ attachmentRoutes.post("/", authRequired, async (c) => {
     `INSERT INTO attachment (uid, creator_id, created_ts, updated_ts, filename, type, size, memo_id, storage_type, reference)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'R2', ?) RETURNING *`
   )
-    .bind(uid, user.id, createdTs, createdTs, filename, fileType, fileData.byteLength, memoId, r2Key)
+    .bind(uid, user.id, createdTs, createdTs, filename, fileType, fileData.byteLength, memoId, objectKey)
     .first<AttachmentRow>();
 
   await deleteCachedKeys(c.env.CACHE, ["instance:stats"]);
@@ -287,9 +286,9 @@ attachmentRoutes.delete("/:id", authRequired, async (c) => {
     return c.json({ error: "Permission denied" }, 403);
   }
 
-  // Delete from R2
+  // Delete from S3
   if (att.reference) {
-    await c.env.BUCKET.delete(att.reference);
+    await s3Delete(c.env, att.reference);
   }
 
   await c.env.DB.prepare("DELETE FROM attachment WHERE id = ?").bind(att.id).run();
@@ -308,7 +307,7 @@ attachmentRoutes.post("/:action", authRequired, async (c) => {
   for (const reference of body.names || body.ids || []) {
     const att = await findAttachmentByToken(c.env.DB, String(reference));
     if (att && (att.creator_id === user.id || user.role === "ADMIN")) {
-      if (att.reference) await c.env.BUCKET.delete(att.reference);
+      if (att.reference) await s3Delete(c.env, att.reference);
       await c.env.DB.prepare("DELETE FROM attachment WHERE id = ?").bind(att.id).run();
     }
   }
