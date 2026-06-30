@@ -17,8 +17,19 @@ function getS3Client(env: Env): AwsClient {
   return client;
 }
 
-function objectUrl(env: Env, key: string): string {
-  return `https://b2-proxy/${env.S3_BUCKET}/${key}`;
+/** 双模式：Service Binding 优先，回退到直连 S3 */
+function requestUrl(env: Env, key: string): string {
+  if (env.B2_PROXY) {
+    return `https://b2-proxy/${env.S3_BUCKET}/${key}`;
+  }
+  return `${env.S3_ENDPOINT}/${env.S3_BUCKET}/${key}`;
+}
+
+function sendRequest(env: Env, signed: Request): Promise<Response> {
+  if (env.B2_PROXY) {
+    return env.B2_PROXY.fetch(signed);
+  }
+  return fetch(signed);
 }
 
 export async function s3Get(
@@ -27,13 +38,13 @@ export async function s3Get(
   options?: { range?: { offset: number; length: number } },
 ): Promise<Response | null> {
   const client = getS3Client(env);
-  const url = objectUrl(env, key);
+  const url = requestUrl(env, key);
   const headers: Record<string, string> = {};
   if (options?.range) {
     headers["Range"] = `bytes=${options.range.offset}-${options.range.offset + options.range.length - 1}`;
   }
   const signed = await client.sign(url, { headers });
-  const response = await env.B2_PROXY.fetch(signed);
+  const response = await sendRequest(env, signed);
   if (response.status === 404) return null;
   return response;
 }
@@ -45,13 +56,13 @@ export async function s3Put(
   contentType: string,
 ): Promise<void> {
   const client = getS3Client(env);
-  const url = objectUrl(env, key);
+  const url = requestUrl(env, key);
   const signed = await client.sign(url, {
     method: "PUT",
     body: data,
     headers: { "Content-Type": contentType },
   });
-  const response = await env.B2_PROXY.fetch(signed);
+  const response = await sendRequest(env, signed);
   if (!response.ok) {
     throw new Error(`S3 PUT failed: ${response.status} ${await response.text()}`);
   }
@@ -59,9 +70,9 @@ export async function s3Put(
 
 export async function s3Delete(env: Env, key: string): Promise<void> {
   const client = getS3Client(env);
-  const url = objectUrl(env, key);
+  const url = requestUrl(env, key);
   const signed = await client.sign(url, { method: "DELETE" });
-  const response = await env.B2_PROXY.fetch(signed);
+  const response = await sendRequest(env, signed);
   if (!response.ok) {
     throw new Error(`S3 DELETE failed: ${response.status} ${await response.text()}`);
   }
