@@ -1,5 +1,57 @@
 # Memos on Cloudflare
 
+> **本项目在原版基础上增加了 B2 存储代理。** 通过独立的 S3 代理 Worker 将文件存储到 Backblaze B2，使用 Cloudflare Service Binding 实现 Worker 间零开销通信。支持双模式切换：代理模式或直连任意 S3 兼容存储。
+
+## 架构
+
+```
+用户 ──→ cf-memos (Worker)
+              │
+              ├── D1 (数据库)
+              ├── AI (语音转写)
+              │
+              └── S3 双模式
+                   ├─ 模式 A: Service Binding → B2 代理 Worker → B2
+                   └─ 模式 B: 直连 S3 (任意 S3 兼容存储)
+```
+
+### 存储模式说明
+
+**模式 A：B2 代理（推荐）**
+
+需要部署一个独立的 S3 代理 Worker 用于转发和验签。
+
+cf-memos 配置：
+- Service Binding：`B2_PROXY` → 你的代理 Worker
+- Secrets：`S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY`
+- 代码自动检测 Binding 存在即走代理模式
+
+代理 Worker 使用同一组 S3 凭证验证请求签名，验证通过后转发到 B2。
+
+**模式 B：直连 S3**
+
+去掉 `B2_PROXY` Service Binding，添加 `S3_ENDPOINT` 变量即可直连任意 S3 兼容存储。
+
+无需改代码，有 Binding 走代理，无 Binding 走直连。
+
+### 环境变量
+
+通过 Cloudflare Dashboard 配置，不写入代码：
+
+| 名称 | 必需 | 说明 |
+|------|------|------|
+| `JWT_SECRET` | ✅ | JWT 签名密钥 |
+| `S3_ACCESS_KEY_ID` | ✅ | S3 凭证 |
+| `S3_SECRET_ACCESS_KEY` | ✅ | S3 凭证 |
+| `S3_REGION` | ✅ | S3 区域 |
+| `S3_BUCKET` | ✅ | 桶名 |
+| `S3_ENDPOINT` | 直连模式 | S3 端点 |
+| `INSTANCE_NAME` | 否 | 实例名称 |
+
+---
+
+## 原项目文档
+
 将 [Memos](https://github.com/usememos/memos) 笔记应用完整迁移到 Cloudflare 边缘平台，使用 Workers + D1 + R2 替代原有的 Go + SQLite + 本地存储架构。
 
 ## 技术栈
